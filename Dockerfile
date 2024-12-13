@@ -46,7 +46,7 @@ COPY --from=builder $SERVER_DIR/go.sum $SERVER_DIR/
 # Set the Go proxy to improve dependency resolution speed
 ENV GOPROXY=https://mirrors.aliyun.com/goproxy/,https://goproxy.cn,https://goproxy.io,direct
 
-RUN go install github.com/openimsdk/gomake@v0.0.14
+RUN go get github.com/openimsdk/gomake@v0.0.14-alpha.5
 
 # Set the command to run when the container starts
 ENTRYPOINT ["sh", "-c", "mage start && tail -f /dev/null"]
