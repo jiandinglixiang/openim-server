@@ -43,6 +43,9 @@ COPY --from=builder $SERVER_DIR/start-config.yml $SERVER_DIR/
 COPY --from=builder $SERVER_DIR/go.mod $SERVER_DIR/
 COPY --from=builder $SERVER_DIR/go.sum $SERVER_DIR/
 
+# Set the Go proxy to improve dependency resolution speed
+ENV GOPROXY=https://mirrors.aliyun.com/goproxy/,https://goproxy.cn,https://goproxy.io,direct
+
 RUN go install github.com/openimsdk/gomake@v0.0.14
 
 # Set the command to run when the container starts
