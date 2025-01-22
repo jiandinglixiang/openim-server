@@ -18,10 +18,11 @@ import (
 	"context"
 	"sync/atomic"
 
+	"github.com/openimsdk/open-im-server/v3/pkg/rpcli"
+
 	"github.com/openimsdk/open-im-server/v3/pkg/authverify"
 	"github.com/openimsdk/open-im-server/v3/pkg/common/servererrs"
 	"github.com/openimsdk/open-im-server/v3/pkg/common/startrpc"
-	"github.com/openimsdk/open-im-server/v3/pkg/rpcclient"
 	"github.com/openimsdk/protocol/constant"
 	"github.com/openimsdk/protocol/msggateway"
 	"github.com/openimsdk/protocol/sdkws"
@@ -35,9 +36,15 @@ import (
 )
 
 func (s *Server) InitServer(ctx context.Context, config *Config, disCov discovery.SvcDiscoveryRegistry, server *grpc.Server) error {
-	s.LongConnServer.SetDiscoveryRegistry(disCov, config)
+	userConn, err := disCov.GetConn(ctx, config.Share.RpcRegisterName.User)
+	if err != nil {
+		return err
+	}
+	s.userClient = rpcli.NewUserClient(userConn)
+	if err := s.LongConnServer.SetDiscoveryRegistry(ctx, disCov, config); err != nil {
+		return err
+	}
 	msggateway.RegisterMsgGatewayServer(server, s)
-	s.userRcp = rpcclient.NewUserRpcClient(disCov, config.Share.RpcRegisterName.User, config.Share.IMAdminUserID)
 	if s.ready != nil {
 		return s.ready(s)
 	}
@@ -47,31 +54,35 @@ func (s *Server) InitServer(ctx context.Context, config *Config, disCov discover
 func (s *Server) Start(ctx context.Context, index int, conf *Config) error {
 	return startrpc.Start(ctx, &conf.Discovery, &conf.MsgGateway.Prometheus, conf.MsgGateway.ListenIP,
 		conf.MsgGateway.RPC.RegisterIP,
+		conf.MsgGateway.RPC.AutoSetPorts,
 		conf.MsgGateway.RPC.Ports, index,
 		conf.Share.RpcRegisterName.MessageGateway,
 		&conf.Share,
 		conf,
+		[]string{
+			conf.Share.RpcRegisterName.MessageGateway,
+		},
 		s.InitServer,
 	)
 }
 
 type Server struct {
+	msggateway.UnimplementedMsgGatewayServer
 	rpcPort        int
 	LongConnServer LongConnServer
 	config         *Config
 	pushTerminal   map[int]struct{}
 	ready          func(srv *Server) error
-	userRcp        rpcclient.UserRpcClient
 	queue          *memamq.MemoryQueue
+	userClient     *rpcli.UserClient
 }
 
 func (s *Server) SetLongConnServer(LongConnServer LongConnServer) {
 	s.LongConnServer = LongConnServer
 }
 
-func NewServer(rpcPort int, longConnServer LongConnServer, conf *Config, ready func(srv *Server) error) *Server {
+func NewServer(longConnServer LongConnServer, conf *Config, ready func(srv *Server) error) *Server {
 	s := &Server{
-		rpcPort:        rpcPort,
 		LongConnServer: longConnServer,
 		pushTerminal:   make(map[int]struct{}),
 		config:         conf,
@@ -81,10 +92,6 @@ func NewServer(rpcPort int, longConnServer LongConnServer, conf *Config, ready f
 	s.pushTerminal[constant.IOSPlatformID] = struct{}{}
 	s.pushTerminal[constant.AndroidPlatformID] = struct{}{}
 	return s
-}
-
-func (s *Server) OnlinePushMsg(context context.Context, req *msggateway.OnlinePushMsgReq) (*msggateway.OnlinePushMsgResp, error) {
-	panic("implement me")
 }
 
 func (s *Server) GetUsersOnlineStatus(ctx context.Context, req *msggateway.GetUsersOnlineStatusReq) (*msggateway.GetUsersOnlineStatusResp, error) {
@@ -118,11 +125,6 @@ func (s *Server) GetUsersOnlineStatus(ctx context.Context, req *msggateway.GetUs
 		}
 	}
 	return &resp, nil
-}
-
-func (s *Server) OnlineBatchPushOneMsg(ctx context.Context, req *msggateway.OnlineBatchPushOneMsgReq) (*msggateway.OnlineBatchPushOneMsgResp, error) {
-	// todo implement
-	return nil, nil
 }
 
 func (s *Server) pushToUser(ctx context.Context, userID string, msgData *sdkws.MsgData) *msggateway.SingleMsgToUserResults {

@@ -16,13 +16,13 @@ package msggateway
 
 import (
 	"context"
+	"time"
+
 	"github.com/openimsdk/open-im-server/v3/pkg/common/config"
 	"github.com/openimsdk/open-im-server/v3/pkg/rpccache"
 	"github.com/openimsdk/tools/db/redisutil"
-	"github.com/openimsdk/tools/utils/datautil"
-	"time"
-
 	"github.com/openimsdk/tools/log"
+	"github.com/openimsdk/tools/utils/datautil"
 )
 
 type Config struct {
@@ -35,13 +35,10 @@ type Config struct {
 
 // Start run ws server.
 func Start(ctx context.Context, index int, conf *Config) error {
-	log.CInfo(ctx, "MSG-GATEWAY server is initializing", "rpcPorts", conf.MsgGateway.RPC.Ports,
+	log.CInfo(ctx, "MSG-GATEWAY server is initializing", "autoSetPorts", conf.MsgGateway.RPC.AutoSetPorts,
+		"rpcPorts", conf.MsgGateway.RPC.Ports,
 		"wsPort", conf.MsgGateway.LongConnSvr.Ports, "prometheusPorts", conf.MsgGateway.Prometheus.Ports)
 	wsPort, err := datautil.GetElemByIndex(conf.MsgGateway.LongConnSvr.Ports, index)
-	if err != nil {
-		return err
-	}
-	rpcPort, err := datautil.GetElemByIndex(conf.MsgGateway.RPC.Ports, index)
 	if err != nil {
 		return err
 	}
@@ -57,9 +54,10 @@ func Start(ctx context.Context, index int, conf *Config) error {
 		WithMessageMaxMsgLength(conf.MsgGateway.LongConnSvr.WebsocketMaxMsgLen),
 	)
 
-	hubServer := NewServer(rpcPort, longServer, conf, func(srv *Server) error {
-		longServer.online, _ = rpccache.NewOnlineCache(srv.userRcp, nil, rdb, false, longServer.subscriberUserOnlineStatusChanges)
-		return nil
+	hubServer := NewServer(longServer, conf, func(srv *Server) error {
+		var err error
+		longServer.online, err = rpccache.NewOnlineCache(srv.userClient, nil, rdb, false, longServer.subscriberUserOnlineStatusChanges)
+		return err
 	})
 
 	go longServer.ChangeOnlineStatus(4)

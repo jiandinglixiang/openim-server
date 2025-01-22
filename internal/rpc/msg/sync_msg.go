@@ -92,7 +92,7 @@ func (m *msgServer) GetSeqMessage(ctx context.Context, req *msg.GetSeqMessageReq
 		NotificationMsgs: make(map[string]*sdkws.PullMsgs),
 	}
 	for _, conv := range req.Conversations {
-		_, _, msgs, err := m.MsgDatabase.GetMsgBySeqs(ctx, req.UserID, conv.ConversationID, conv.Seqs)
+		isEnd, endSeq, msgs, err := m.MsgDatabase.GetMessagesBySeqWithBounds(ctx, req.UserID, conv.ConversationID, conv.Seqs, req.GetOrder())
 		if err != nil {
 			return nil, err
 		}
@@ -111,6 +111,8 @@ func (m *msgServer) GetSeqMessage(ctx context.Context, req *msg.GetSeqMessageReq
 			}
 		}
 		pullMsgs.Msgs = append(pullMsgs.Msgs, msgs...)
+		pullMsgs.IsEnd = isEnd
+		pullMsgs.EndSeq = endSeq
 	}
 	return resp, nil
 }
@@ -242,4 +244,12 @@ func (m *msgServer) SearchMessage(ctx context.Context, req *msg.SearchMessageReq
 
 func (m *msgServer) GetServerTime(ctx context.Context, _ *msg.GetServerTimeReq) (*msg.GetServerTimeResp, error) {
 	return &msg.GetServerTimeResp{ServerTime: timeutil.GetCurrentTimestampByMill()}, nil
+}
+
+func (m *msgServer) GetLastMessage(ctx context.Context, req *msg.GetLastMessageReq) (*msg.GetLastMessageResp, error) {
+	msgs, err := m.MsgDatabase.GetLastMessage(ctx, req.ConversationIDs, req.UserID)
+	if err != nil {
+		return nil, err
+	}
+	return &msg.GetLastMessageResp{Msgs: msgs}, nil
 }

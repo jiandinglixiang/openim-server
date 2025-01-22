@@ -31,6 +31,7 @@ import (
 	tablerelation "github.com/openimsdk/open-im-server/v3/pkg/common/storage/model"
 	"github.com/openimsdk/open-im-server/v3/pkg/common/webhook"
 	"github.com/openimsdk/open-im-server/v3/pkg/localcache"
+	"github.com/openimsdk/open-im-server/v3/pkg/rpcli"
 	"github.com/openimsdk/protocol/group"
 	friendpb "github.com/openimsdk/protocol/relation"
 	"github.com/openimsdk/tools/db/redisutil"
@@ -39,7 +40,6 @@ import (
 	"github.com/openimsdk/open-im-server/v3/pkg/common/convert"
 	"github.com/openimsdk/open-im-server/v3/pkg/common/servererrs"
 	"github.com/openimsdk/open-im-server/v3/pkg/common/storage/controller"
-	"github.com/openimsdk/open-im-server/v3/pkg/rpcclient"
 	"github.com/openimsdk/protocol/constant"
 	"github.com/openimsdk/protocol/sdkws"
 	pbuser "github.com/openimsdk/protocol/user"
@@ -52,15 +52,16 @@ import (
 )
 
 type userServer struct {
+	pbuser.UnimplementedUserServer
 	online                   cache.OnlineCache
 	db                       controller.UserDatabase
 	friendNotificationSender *relation.FriendNotificationSender
 	userNotificationSender   *UserNotificationSender
-	friendRpcClient          *rpcclient.FriendRpcClient
-	groupRpcClient           *rpcclient.GroupRpcClient
 	RegisterCenter           registry.SvcDiscoveryRegistry
 	config                   *Config
 	webhookClient            *webhook.Client
+	groupClient              *rpcli.GroupClient
+	relationClient           *rpcli.RelationClient
 }
 
 type Config struct {
@@ -93,22 +94,33 @@ func Start(ctx context.Context, config *Config, client registry.SvcDiscoveryRegi
 	if err != nil {
 		return err
 	}
+	msgConn, err := client.GetConn(ctx, config.Share.RpcRegisterName.Msg)
+	if err != nil {
+		return err
+	}
+	groupConn, err := client.GetConn(ctx, config.Share.RpcRegisterName.Group)
+	if err != nil {
+		return err
+	}
+	friendConn, err := client.GetConn(ctx, config.Share.RpcRegisterName.Friend)
+	if err != nil {
+		return err
+	}
+	msgClient := rpcli.NewMsgClient(msgConn)
 	userCache := redis.NewUserCacheRedis(rdb, &config.LocalCacheConfig, userDB, redis.GetRocksCacheOptions())
 	database := controller.NewUserDatabase(userDB, userCache, mgocli.GetTx())
-	friendRpcClient := rpcclient.NewFriendRpcClient(client, config.Share.RpcRegisterName.Friend)
-	groupRpcClient := rpcclient.NewGroupRpcClient(client, config.Share.RpcRegisterName.Group)
-	msgRpcClient := rpcclient.NewMessageRpcClient(client, config.Share.RpcRegisterName.Msg)
 	localcache.InitLocalCache(&config.LocalCacheConfig)
 	u := &userServer{
 		online:                   redis.NewUserOnline(rdb),
 		db:                       database,
 		RegisterCenter:           client,
-		friendRpcClient:          &friendRpcClient,
-		groupRpcClient:           &groupRpcClient,
-		friendNotificationSender: relation.NewFriendNotificationSender(&config.NotificationConfig, &msgRpcClient, relation.WithDBFunc(database.FindWithError)),
-		userNotificationSender:   NewUserNotificationSender(config, &msgRpcClient, WithUserFunc(database.FindWithError)),
+		friendNotificationSender: relation.NewFriendNotificationSender(&config.NotificationConfig, msgClient, relation.WithDBFunc(database.FindWithError)),
+		userNotificationSender:   NewUserNotificationSender(config, msgClient, WithUserFunc(database.FindWithError)),
 		config:                   config,
 		webhookClient:            webhook.NewWebhookClient(config.WebhooksConfig.URL),
+
+		groupClient:    rpcli.NewGroupClient(groupConn),
+		relationClient: rpcli.NewRelationClient(friendConn),
 	}
 	pbuser.RegisterUserServer(server, u)
 	return u.db.InitOnce(context.Background(), users)
@@ -468,7 +480,9 @@ func (s *userServer) AddNotificationAccount(ctx context.Context, req *pbuser.Add
 	if err := authverify.CheckAdmin(ctx, s.config.Share.IMAdminUserID); err != nil {
 		return nil, err
 	}
-
+	if req.AppMangerLevel < constant.AppNotificationAdmin {
+		return nil, errs.ErrArgs.WithDetail("app level not supported")
+	}
 	if req.UserID == "" {
 		for i := 0; i < 20; i++ {
 			userId := s.genUserID()
@@ -494,16 +508,17 @@ func (s *userServer) AddNotificationAccount(ctx context.Context, req *pbuser.Add
 		Nickname:       req.NickName,
 		FaceURL:        req.FaceURL,
 		CreateTime:     time.Now(),
-		AppMangerLevel: constant.AppNotificationAdmin,
+		AppMangerLevel: req.AppMangerLevel,
 	}
 	if err := s.db.Create(ctx, []*tablerelation.User{user}); err != nil {
 		return nil, err
 	}
 
 	return &pbuser.AddNotificationAccountResp{
-		UserID:   req.UserID,
-		NickName: req.NickName,
-		FaceURL:  req.FaceURL,
+		UserID:         req.UserID,
+		NickName:       req.NickName,
+		FaceURL:        req.FaceURL,
+		AppMangerLevel: req.AppMangerLevel,
 	}, nil
 }
 
@@ -583,8 +598,13 @@ func (s *userServer) GetNotificationAccount(ctx context.Context, req *pbuser.Get
 	if err != nil {
 		return nil, servererrs.ErrUserIDNotFound.Wrap()
 	}
-	if user.AppMangerLevel == constant.AppAdmin || user.AppMangerLevel == constant.AppNotificationAdmin {
-		return &pbuser.GetNotificationAccountResp{}, nil
+	if user.AppMangerLevel == constant.AppAdmin || user.AppMangerLevel >= constant.AppNotificationAdmin {
+		return &pbuser.GetNotificationAccountResp{Account: &pbuser.NotificationAccountInfo{
+			UserID:         user.UserID,
+			FaceURL:        user.FaceURL,
+			NickName:       user.Nickname,
+			AppMangerLevel: user.AppMangerLevel,
+		}}, nil
 	}
 
 	return nil, errs.ErrNoPermission.WrapMsg("notification messages cannot be sent for this ID")
@@ -609,11 +629,12 @@ func (s *userServer) userModelToResp(users []*tablerelation.User, pagination pag
 	accounts := make([]*pbuser.NotificationAccountInfo, 0)
 	var total int64
 	for _, v := range users {
-		if v.AppMangerLevel == constant.AppNotificationAdmin && !datautil.Contain(v.UserID, s.config.Share.IMAdminUserID...) {
+		if v.AppMangerLevel >= constant.AppNotificationAdmin && !datautil.Contain(v.UserID, s.config.Share.IMAdminUserID...) {
 			temp := &pbuser.NotificationAccountInfo{
-				UserID:   v.UserID,
-				FaceURL:  v.FaceURL,
-				NickName: v.Nickname,
+				UserID:         v.UserID,
+				FaceURL:        v.FaceURL,
+				NickName:       v.Nickname,
+				AppMangerLevel: v.AppMangerLevel,
 			}
 			accounts = append(accounts, temp)
 			total += 1
@@ -640,7 +661,7 @@ func (s *userServer) NotificationUserInfoUpdate(ctx context.Context, userID stri
 	wg.Add(len(es))
 	go func() {
 		defer wg.Done()
-		_, es[0] = s.groupRpcClient.Client.NotificationUserInfoUpdate(ctx, &group.NotificationUserInfoUpdateReq{
+		_, es[0] = s.groupClient.NotificationUserInfoUpdate(ctx, &group.NotificationUserInfoUpdateReq{
 			UserID:      userID,
 			OldUserInfo: oldUserInfo,
 			NewUserInfo: newUserInfo,
@@ -649,7 +670,7 @@ func (s *userServer) NotificationUserInfoUpdate(ctx context.Context, userID stri
 
 	go func() {
 		defer wg.Done()
-		_, es[1] = s.friendRpcClient.Client.NotificationUserInfoUpdate(ctx, &friendpb.NotificationUserInfoUpdateReq{
+		_, es[1] = s.relationClient.NotificationUserInfoUpdate(ctx, &friendpb.NotificationUserInfoUpdateReq{
 			UserID:      userID,
 			OldUserInfo: oldUserInfo,
 			NewUserInfo: newUserInfo,

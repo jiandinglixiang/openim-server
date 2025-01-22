@@ -16,9 +16,10 @@ package mgo
 
 import (
 	"context"
+	"time"
+
 	"github.com/openimsdk/open-im-server/v3/pkg/common/storage/database"
 	"github.com/openimsdk/open-im-server/v3/pkg/common/storage/model"
-	"time"
 
 	"github.com/openimsdk/protocol/constant"
 	"github.com/openimsdk/tools/db/mongoutil"
@@ -226,4 +227,36 @@ func (c *ConversationMgo) GetConversationNotReceiveMessageUserIDs(ctx context.Co
 
 func (c *ConversationMgo) FindConversationUserVersion(ctx context.Context, userID string, version uint, limit int) (*model.VersionLog, error) {
 	return c.version.FindChangeLog(ctx, userID, version, limit)
+}
+
+func (c *ConversationMgo) FindRandConversation(ctx context.Context, ts int64, limit int) ([]*model.Conversation, error) {
+	pipeline := []bson.M{
+		{
+			"$match": bson.M{
+				"is_msg_destruct":   true,
+				"msg_destruct_time": bson.M{"$ne": 0},
+			},
+		},
+		{
+			"$addFields": bson.M{
+				"next_msg_destruct_timestamp": bson.M{
+					"$add": []any{
+						bson.M{
+							"$toLong": "$latest_msg_destruct_time",
+						}, "$msg_destruct_time"},
+				},
+			},
+		},
+		{
+			"$match": bson.M{
+				"next_msg_destruct_timestamp": bson.M{"$lt": ts},
+			},
+		},
+		{
+			"$sample": bson.M{
+				"size": limit,
+			},
+		},
+	}
+	return mongoutil.Aggregate[*model.Conversation](ctx, c.coll, pipeline)
 }

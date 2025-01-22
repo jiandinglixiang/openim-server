@@ -19,17 +19,14 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"github.com/openimsdk/open-im-server/v3/pkg/authverify"
 	"path"
 	"strconv"
 	"time"
 
-	"github.com/openimsdk/open-im-server/v3/pkg/common/config"
-	"github.com/openimsdk/open-im-server/v3/pkg/common/storage/model"
-	"go.mongodb.org/mongo-driver/mongo"
-
 	"github.com/google/uuid"
 	"github.com/openimsdk/open-im-server/v3/pkg/common/servererrs"
-	"github.com/openimsdk/protocol/sdkws"
+	"github.com/openimsdk/open-im-server/v3/pkg/common/storage/model"
 	"github.com/openimsdk/protocol/third"
 	"github.com/openimsdk/tools/errs"
 	"github.com/openimsdk/tools/log"
@@ -288,50 +285,35 @@ func (t *thirdServer) apiAddress(prefix, name string) string {
 }
 
 func (t *thirdServer) DeleteOutdatedData(ctx context.Context, req *third.DeleteOutdatedDataReq) (*third.DeleteOutdatedDataResp, error) {
-	var conf config.Third
-	expireTime := time.UnixMilli(req.ExpireTime)
-	var deltotal int
-	findPagination := &sdkws.RequestPagination{
-		PageNumber: 1,
-		ShowNumber: 1000,
+	if err := authverify.CheckAdmin(ctx, t.config.Share.IMAdminUserID); err != nil {
+		return nil, err
 	}
-	for {
-		total, models, err := t.s3dataBase.FindByExpires(ctx, expireTime, findPagination)
-		if err != nil && errs.Unwrap(err) != mongo.ErrNoDocuments {
+	engine := t.config.RpcConfig.Object.Enable
+	expireTime := time.UnixMilli(req.ExpireTime)
+	// Find all expired data in S3 database
+	models, err := t.s3dataBase.FindExpirationObject(ctx, engine, expireTime, req.ObjectGroup, int64(req.Limit))
+	if err != nil {
+		return nil, err
+	}
+	for i, obj := range models {
+		if err := t.s3dataBase.DeleteSpecifiedData(ctx, engine, []string{obj.Name}); err != nil {
 			return nil, errs.Wrap(err)
 		}
-		needDelObjectKeys := make([]string, 0)
-		for _, model := range models {
-			needDelObjectKeys = append(needDelObjectKeys, model.Key)
+		if err := t.s3dataBase.DelS3Key(ctx, engine, obj.Name); err != nil {
+			return nil, err
 		}
-
-		needDelObjectKeys = datautil.Distinct(needDelObjectKeys)
-		for _, key := range needDelObjectKeys {
-			count, err := t.s3dataBase.FindNotDelByS3(ctx, key, expireTime)
-			if err != nil && errs.Unwrap(err) != mongo.ErrNoDocuments {
-				return nil, errs.Wrap(err)
-			}
-			if int(count) < 1 && t.minio != nil {
-				thumbnailKey, _ := t.getMinioImageThumbnailKey(ctx, key)
-
-				t.s3dataBase.DeleteObject(ctx, thumbnailKey)
-				t.s3dataBase.DelS3Key(ctx, conf.Object.Enable, needDelObjectKeys...)
-				t.s3dataBase.DeleteObject(ctx, key)
+		count, err := t.s3dataBase.GetKeyCount(ctx, engine, obj.Key)
+		if err != nil {
+			return nil, err
+		}
+		log.ZDebug(ctx, "delete s3 object record", "index", i, "s3", obj, "count", count)
+		if count == 0 {
+			if err := t.s3.DeleteObject(ctx, obj.Key); err != nil {
+				return nil, err
 			}
 		}
-		for _, model := range models {
-			err := t.s3dataBase.DeleteSpecifiedData(ctx, model.Engine, model.Name)
-			if err != nil {
-				return nil, errs.Wrap(err)
-			}
-		}
-		if total < int64(findPagination.ShowNumber) {
-			break
-		}
-		deltotal += int(total)
 	}
-	log.ZDebug(ctx, "DeleteOutdatedData", "delete Total", deltotal)
-	return &third.DeleteOutdatedDataResp{}, nil
+	return &third.DeleteOutdatedDataResp{Count: int32(len(models))}, nil
 }
 
 type FormDataMate struct {

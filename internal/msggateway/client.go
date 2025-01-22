@@ -18,8 +18,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/openimsdk/tools/mw"
-	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -133,7 +131,7 @@ func (c *Client) readMessage() {
 	defer func() {
 		if r := recover(); r != nil {
 			c.closedErr = ErrPanic
-			fmt.Println("socket have panic err:", r, string(debug.Stack()))
+			log.ZPanic(c.ctx, "socket have panic err:", errs.ErrPanic(r))
 		}
 		c.close()
 	}()
@@ -238,6 +236,8 @@ func (c *Client) handleMessage(message []byte) error {
 		resp, messageErr = c.longConnServer.GetSeqMessage(ctx, binaryReq)
 	case WSGetConvMaxReadSeq:
 		resp, messageErr = c.longConnServer.GetConversationsHasReadAndMaxSeq(ctx, binaryReq)
+	case WsPullConvLastMessage:
+		resp, messageErr = c.longConnServer.GetLastMessage(ctx, binaryReq)
 	case WsLogoutMsg:
 		resp, messageErr = c.longConnServer.UserLogout(ctx, binaryReq)
 	case WsSetBackgroundStatus:
@@ -378,7 +378,7 @@ func (c *Client) activeHeartbeat(ctx context.Context) {
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
-					mw.PanicStackToLog(ctx, r)
+					log.ZPanic(ctx, "activeHeartbeat Panic", errs.ErrPanic(r))
 				}
 			}()
 			log.ZDebug(ctx, "server initiative send heartbeat start.")

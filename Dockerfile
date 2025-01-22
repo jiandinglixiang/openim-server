@@ -9,6 +9,7 @@ WORKDIR $SERVER_DIR
 
 # Set the Go proxy to improve dependency resolution speed
 ENV GOPROXY=https://mirrors.aliyun.com/goproxy/,https://goproxy.cn,https://goproxy.io,direct
+# ENV GOPROXY=https://goproxy.io,direct
 
 # Copy all files from the current directory into the container
 COPY . .

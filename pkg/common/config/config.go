@@ -21,6 +21,7 @@ import (
 	"github.com/openimsdk/tools/db/mongoutil"
 	"github.com/openimsdk/tools/db/redisutil"
 	"github.com/openimsdk/tools/mq/kafka"
+	"github.com/openimsdk/tools/s3/aws"
 	"github.com/openimsdk/tools/s3/cos"
 	"github.com/openimsdk/tools/s3/kodo"
 	"github.com/openimsdk/tools/s3/minio"
@@ -106,16 +107,18 @@ type API struct {
 		CompressionLevel int    `mapstructure:"compressionLevel"`
 	} `mapstructure:"api"`
 	Prometheus struct {
-		Enable     bool   `mapstructure:"enable"`
-		Ports      []int  `mapstructure:"ports"`
-		GrafanaURL string `mapstructure:"grafanaURL"`
+		Enable       bool   `mapstructure:"enable"`
+		AutoSetPorts bool   `mapstructure:"autoSetPorts"`
+		Ports        []int  `mapstructure:"ports"`
+		GrafanaURL   string `mapstructure:"grafanaURL"`
 	} `mapstructure:"prometheus"`
 }
 
 type CronTask struct {
-	CronExecuteTime   string `mapstructure:"cronExecuteTime"`
-	RetainChatRecords int    `mapstructure:"retainChatRecords"`
-	FileExpireTime    int    `mapstructure:"fileExpireTime"`
+	CronExecuteTime   string   `mapstructure:"cronExecuteTime"`
+	RetainChatRecords int      `mapstructure:"retainChatRecords"`
+	FileExpireTime    int      `mapstructure:"fileExpireTime"`
+	DeleteObjectType  []string `mapstructure:"deleteObjectType"`
 }
 
 type OfflinePushConfig struct {
@@ -175,8 +178,9 @@ type Prometheus struct {
 
 type MsgGateway struct {
 	RPC struct {
-		RegisterIP string `mapstructure:"registerIP"`
-		Ports      []int  `mapstructure:"ports"`
+		RegisterIP   string `mapstructure:"registerIP"`
+		AutoSetPorts bool   `mapstructure:"autoSetPorts"`
+		Ports        []int  `mapstructure:"ports"`
 	} `mapstructure:"rpc"`
 	Prometheus  Prometheus `mapstructure:"prometheus"`
 	ListenIP    string     `mapstructure:"listenIP"`
@@ -189,14 +193,19 @@ type MsgGateway struct {
 }
 
 type MsgTransfer struct {
-	Prometheus Prometheus `mapstructure:"prometheus"`
+	Prometheus struct {
+		Enable       bool  `mapstructure:"enable"`
+		AutoSetPorts bool  `mapstructure:"autoSetPorts"`
+		Ports        []int `mapstructure:"ports"`
+	} `mapstructure:"prometheus"`
 }
 
 type Push struct {
 	RPC struct {
-		RegisterIP string `mapstructure:"registerIP"`
-		ListenIP   string `mapstructure:"listenIP"`
-		Ports      []int  `mapstructure:"ports"`
+		RegisterIP   string `mapstructure:"registerIP"`
+		ListenIP     string `mapstructure:"listenIP"`
+		AutoSetPorts bool   `mapstructure:"autoSetPorts"`
+		Ports        []int  `mapstructure:"ports"`
 	} `mapstructure:"rpc"`
 	Prometheus           Prometheus `mapstructure:"prometheus"`
 	MaxConcurrentWorkers int        `mapstructure:"maxConcurrentWorkers"`
@@ -229,9 +238,10 @@ type Push struct {
 
 type Auth struct {
 	RPC struct {
-		RegisterIP string `mapstructure:"registerIP"`
-		ListenIP   string `mapstructure:"listenIP"`
-		Ports      []int  `mapstructure:"ports"`
+		RegisterIP   string `mapstructure:"registerIP"`
+		ListenIP     string `mapstructure:"listenIP"`
+		AutoSetPorts bool   `mapstructure:"autoSetPorts"`
+		Ports        []int  `mapstructure:"ports"`
 	} `mapstructure:"rpc"`
 	Prometheus  Prometheus `mapstructure:"prometheus"`
 	TokenPolicy struct {
@@ -241,27 +251,30 @@ type Auth struct {
 
 type Conversation struct {
 	RPC struct {
-		RegisterIP string `mapstructure:"registerIP"`
-		ListenIP   string `mapstructure:"listenIP"`
-		Ports      []int  `mapstructure:"ports"`
+		RegisterIP   string `mapstructure:"registerIP"`
+		ListenIP     string `mapstructure:"listenIP"`
+		AutoSetPorts bool   `mapstructure:"autoSetPorts"`
+		Ports        []int  `mapstructure:"ports"`
 	} `mapstructure:"rpc"`
 	Prometheus Prometheus `mapstructure:"prometheus"`
 }
 
 type Friend struct {
 	RPC struct {
-		RegisterIP string `mapstructure:"registerIP"`
-		ListenIP   string `mapstructure:"listenIP"`
-		Ports      []int  `mapstructure:"ports"`
+		RegisterIP   string `mapstructure:"registerIP"`
+		ListenIP     string `mapstructure:"listenIP"`
+		AutoSetPorts bool   `mapstructure:"autoSetPorts"`
+		Ports        []int  `mapstructure:"ports"`
 	} `mapstructure:"rpc"`
 	Prometheus Prometheus `mapstructure:"prometheus"`
 }
 
 type Group struct {
 	RPC struct {
-		RegisterIP string `mapstructure:"registerIP"`
-		ListenIP   string `mapstructure:"listenIP"`
-		Ports      []int  `mapstructure:"ports"`
+		RegisterIP   string `mapstructure:"registerIP"`
+		ListenIP     string `mapstructure:"listenIP"`
+		AutoSetPorts bool   `mapstructure:"autoSetPorts"`
+		Ports        []int  `mapstructure:"ports"`
 	} `mapstructure:"rpc"`
 	Prometheus                 Prometheus `mapstructure:"prometheus"`
 	EnableHistoryForNewMembers bool       `mapstructure:"enableHistoryForNewMembers"`
@@ -269,9 +282,10 @@ type Group struct {
 
 type Msg struct {
 	RPC struct {
-		RegisterIP string `mapstructure:"registerIP"`
-		ListenIP   string `mapstructure:"listenIP"`
-		Ports      []int  `mapstructure:"ports"`
+		RegisterIP   string `mapstructure:"registerIP"`
+		ListenIP     string `mapstructure:"listenIP"`
+		AutoSetPorts bool   `mapstructure:"autoSetPorts"`
+		Ports        []int  `mapstructure:"ports"`
 	} `mapstructure:"rpc"`
 	Prometheus   Prometheus `mapstructure:"prometheus"`
 	FriendVerify bool       `mapstructure:"friendVerify"`
@@ -279,9 +293,10 @@ type Msg struct {
 
 type Third struct {
 	RPC struct {
-		RegisterIP string `mapstructure:"registerIP"`
-		ListenIP   string `mapstructure:"listenIP"`
-		Ports      []int  `mapstructure:"ports"`
+		RegisterIP   string `mapstructure:"registerIP"`
+		ListenIP     string `mapstructure:"listenIP"`
+		AutoSetPorts bool   `mapstructure:"autoSetPorts"`
+		Ports        []int  `mapstructure:"ports"`
 	} `mapstructure:"rpc"`
 	Prometheus Prometheus `mapstructure:"prometheus"`
 	Object     struct {
@@ -289,14 +304,7 @@ type Third struct {
 		Cos    Cos    `mapstructure:"cos"`
 		Oss    Oss    `mapstructure:"oss"`
 		Kodo   Kodo   `mapstructure:"kodo"`
-		Aws    struct {
-			Endpoint        string `mapstructure:"endpoint"`
-			Region          string `mapstructure:"region"`
-			Bucket          string `mapstructure:"bucket"`
-			AccessKeyID     string `mapstructure:"accessKeyID"`
-			AccessKeySecret string `mapstructure:"accessKeySecret"`
-			PublicRead      bool   `mapstructure:"publicRead"`
-		} `mapstructure:"aws"`
+		Aws    Aws    `mapstructure:"aws"`
 	} `mapstructure:"object"`
 }
 type Cos struct {
@@ -326,11 +334,21 @@ type Kodo struct {
 	PublicRead      bool   `mapstructure:"publicRead"`
 }
 
+type Aws struct {
+	Endpoint        string `mapstructure:"endpoint"`
+	Region          string `mapstructure:"region"`
+	Bucket          string `mapstructure:"bucket"`
+	AccessKeyID     string `mapstructure:"accessKeyID"`
+	SecretAccessKey string `mapstructure:"secretAccessKey"`
+	SessionToken    string `mapstructure:"sessionToken"`
+}
+
 type User struct {
 	RPC struct {
-		RegisterIP string `mapstructure:"registerIP"`
-		ListenIP   string `mapstructure:"listenIP"`
-		Ports      []int  `mapstructure:"ports"`
+		RegisterIP   string `mapstructure:"registerIP"`
+		ListenIP     string `mapstructure:"listenIP"`
+		AutoSetPorts bool   `mapstructure:"autoSetPorts"`
+		Ports        []int  `mapstructure:"ports"`
 	} `mapstructure:"rpc"`
 	Prometheus Prometheus `mapstructure:"prometheus"`
 }
@@ -566,6 +584,16 @@ func (o *Kodo) Build() *kodo.Config {
 	}
 }
 
+func (o *Aws) Build() *aws.Config {
+	return &aws.Config{
+		Region:          o.Region,
+		Bucket:          o.Bucket,
+		AccessKeyID:     o.AccessKeyID,
+		SecretAccessKey: o.SecretAccessKey,
+		SessionToken:    o.SessionToken,
+	}
+}
+
 func (l *CacheConfig) Failed() time.Duration {
 	return time.Second * time.Duration(l.FailedExpire)
 }
@@ -576,4 +604,116 @@ func (l *CacheConfig) Success() time.Duration {
 
 func (l *CacheConfig) Enable() bool {
 	return l.Topic != "" && l.SlotNum > 0 && l.SlotSize > 0
+}
+
+var (
+	DiscoveryConfigFilename          = "discovery.yml"
+	KafkaConfigFileName              = "kafka.yml"
+	LocalCacheConfigFileName         = "local-cache.yml"
+	LogConfigFileName                = "log.yml"
+	MinioConfigFileName              = "minio.yml"
+	MongodbConfigFileName            = "mongodb.yml"
+	OpenIMAPICfgFileName             = "openim-api.yml"
+	OpenIMCronTaskCfgFileName        = "openim-crontask.yml"
+	OpenIMMsgGatewayCfgFileName      = "openim-msggateway.yml"
+	OpenIMMsgTransferCfgFileName     = "openim-msgtransfer.yml"
+	OpenIMPushCfgFileName            = "openim-push.yml"
+	OpenIMRPCAuthCfgFileName         = "openim-rpc-auth.yml"
+	OpenIMRPCConversationCfgFileName = "openim-rpc-conversation.yml"
+	OpenIMRPCFriendCfgFileName       = "openim-rpc-friend.yml"
+	OpenIMRPCGroupCfgFileName        = "openim-rpc-group.yml"
+	OpenIMRPCMsgCfgFileName          = "openim-rpc-msg.yml"
+	OpenIMRPCThirdCfgFileName        = "openim-rpc-third.yml"
+	OpenIMRPCUserCfgFileName         = "openim-rpc-user.yml"
+	RedisConfigFileName              = "redis.yml"
+	ShareFileName                    = "share.yml"
+	WebhooksConfigFileName           = "webhooks.yml"
+)
+
+func (d *Discovery) GetConfigFileName() string {
+	return DiscoveryConfigFilename
+}
+
+func (k *Kafka) GetConfigFileName() string {
+	return KafkaConfigFileName
+}
+
+func (lc *LocalCache) GetConfigFileName() string {
+	return LocalCacheConfigFileName
+}
+
+func (l *Log) GetConfigFileName() string {
+	return LogConfigFileName
+}
+
+func (m *Minio) GetConfigFileName() string {
+	return MinioConfigFileName
+}
+
+func (m *Mongo) GetConfigFileName() string {
+	return MongodbConfigFileName
+}
+
+func (n *Notification) GetConfigFileName() string {
+	return NotificationFileName
+}
+
+func (a *API) GetConfigFileName() string {
+	return OpenIMAPICfgFileName
+}
+
+func (ct *CronTask) GetConfigFileName() string {
+	return OpenIMCronTaskCfgFileName
+}
+
+func (mg *MsgGateway) GetConfigFileName() string {
+	return OpenIMMsgGatewayCfgFileName
+}
+
+func (mt *MsgTransfer) GetConfigFileName() string {
+	return OpenIMMsgTransferCfgFileName
+}
+
+func (p *Push) GetConfigFileName() string {
+	return OpenIMPushCfgFileName
+}
+
+func (a *Auth) GetConfigFileName() string {
+	return OpenIMRPCAuthCfgFileName
+}
+
+func (c *Conversation) GetConfigFileName() string {
+	return OpenIMRPCConversationCfgFileName
+}
+
+func (f *Friend) GetConfigFileName() string {
+	return OpenIMRPCFriendCfgFileName
+}
+
+func (g *Group) GetConfigFileName() string {
+	return OpenIMRPCGroupCfgFileName
+}
+
+func (m *Msg) GetConfigFileName() string {
+	return OpenIMRPCMsgCfgFileName
+}
+
+func (t *Third) GetConfigFileName() string {
+	return OpenIMRPCThirdCfgFileName
+}
+
+func (u *User) GetConfigFileName() string {
+	return OpenIMRPCUserCfgFileName
+}
+
+func (r *Redis) GetConfigFileName() string {
+	return RedisConfigFileName
+}
+
+func (s *Share) GetConfigFileName() string {
+	return ShareFileName
+}
+
+func (w *Webhooks) GetConfigFileName() string {
+	return WebhooksConfigFileName
 }

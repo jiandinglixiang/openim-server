@@ -16,14 +16,12 @@ package tools
 
 import (
 	"context"
-	"fmt"
-	"os"
-	"time"
 
 	"github.com/openimsdk/open-im-server/v3/pkg/common/config"
 	kdisc "github.com/openimsdk/open-im-server/v3/pkg/common/discoveryregister"
 	pbconversation "github.com/openimsdk/protocol/conversation"
 	"github.com/openimsdk/protocol/msg"
+	"github.com/openimsdk/protocol/third"
 
 	"github.com/openimsdk/tools/mcontext"
 	"github.com/openimsdk/tools/mw"
@@ -46,7 +44,7 @@ func Start(ctx context.Context, config *CronTaskConfig) error {
 	if config.CronTask.RetainChatRecords < 1 {
 		return errs.New("msg destruct time must be greater than 1").Wrap()
 	}
-	client, err := kdisc.NewDiscoveryRegister(&config.Discovery, &config.Share)
+	client, err := kdisc.NewDiscoveryRegister(&config.Discovery, &config.Share, nil)
 	if err != nil {
 		return errs.WrapMsg(err, "failed to register discovery service")
 	}
@@ -58,80 +56,68 @@ func Start(ctx context.Context, config *CronTaskConfig) error {
 		return err
 	}
 
-	// thirdConn, err := client.GetConn(ctx, config.Share.RpcRegisterName.Third)
-	// if err != nil {
-	// 	return err
-	// }
+	thirdConn, err := client.GetConn(ctx, config.Share.RpcRegisterName.Third)
+	if err != nil {
+		return err
+	}
 
 	conversationConn, err := client.GetConn(ctx, config.Share.RpcRegisterName.Conversation)
 	if err != nil {
 		return err
 	}
 
-	msgClient := msg.NewMsgClient(msgConn)
-	conversationClient := pbconversation.NewConversationClient(conversationConn)
-	// thirdClient := third.NewThirdClient(thirdConn)
-
-	crontab := cron.New()
-
-	// scheduled hard delete outdated Msgs in specific time.
-	clearMsgFunc := func() {
-		now := time.Now()
-		deltime := now.Add(-time.Hour * 24 * time.Duration(config.CronTask.RetainChatRecords))
-		ctx := mcontext.SetOperationID(ctx, fmt.Sprintf("cron_%d_%d", os.Getpid(), deltime.UnixMilli()))
-		log.ZDebug(ctx, "clear chat records", "deltime", deltime, "timestamp", deltime.UnixMilli())
-
-		if _, err := msgClient.ClearMsg(ctx, &msg.ClearMsgReq{Timestamp: deltime.UnixMilli()}); err != nil {
-			log.ZError(ctx, "cron clear chat records failed", err, "deltime", deltime, "cont", time.Since(now))
-			return
-		}
-		log.ZDebug(ctx, "cron clear chat records success", "deltime", deltime, "cont", time.Since(now))
-	}
-	if _, err := crontab.AddFunc(config.CronTask.CronExecuteTime, clearMsgFunc); err != nil {
-		return errs.Wrap(err)
+	srv := &cronServer{
+		ctx:                ctx,
+		config:             config,
+		cron:               cron.New(),
+		msgClient:          msg.NewMsgClient(msgConn),
+		conversationClient: pbconversation.NewConversationClient(conversationConn),
+		thirdClient:        third.NewThirdClient(thirdConn),
 	}
 
-	// scheduled soft delete outdated Msgs in specific time when user set `is_msg_destruct` feature.
-	msgDestructFunc := func() {
-		now := time.Now()
-		ctx := mcontext.SetOperationID(ctx, fmt.Sprintf("cron_%d_%d", os.Getpid(), now.UnixMilli()))
-		log.ZDebug(ctx, "msg destruct cron start", "now", now)
-
-		conversations, err := conversationClient.GetConversationsNeedDestructMsgs(ctx, &pbconversation.GetConversationsNeedDestructMsgsReq{})
-		if err != nil {
-			log.ZError(ctx, "Get conversation need Destruct msgs failed.", err)
-			return
-		} else {
-			_, err := msgClient.DestructMsgs(ctx, &msg.DestructMsgsReq{Conversations: conversations.Conversations})
-			if err != nil {
-				log.ZError(ctx, "Destruct Msgs failed.", err)
-				return
-			}
-		}
-		log.ZDebug(ctx, "msg destruct cron task completed", "cont", time.Since(now))
+	if err := srv.registerClearS3(); err != nil {
+		return err
 	}
-	if _, err := crontab.AddFunc(config.CronTask.CronExecuteTime, msgDestructFunc); err != nil {
-		return errs.Wrap(err)
+	if err := srv.registerDeleteMsg(); err != nil {
+		return err
 	}
-
-	// // scheduled delete outdated file Objects and their datas in specific time.
-	// deleteObjectFunc := func() {
-	// 	now := time.Now()
-	// 	deleteTime := now.Add(-time.Hour * 24 * time.Duration(config.CronTask.FileExpireTime))
-	// 	ctx := mcontext.SetOperationID(ctx, fmt.Sprintf("cron_%d_%d", os.Getpid(), deleteTime.UnixMilli()))
-	// 	log.ZDebug(ctx, "deleteoutDatedData ", "deletetime", deleteTime, "timestamp", deleteTime.UnixMilli())
-	// 	if _, err := thirdClient.DeleteOutdatedData(ctx, &third.DeleteOutdatedDataReq{ExpireTime: deleteTime.UnixMilli()}); err != nil {
-	// 		log.ZError(ctx, "cron deleteoutDatedData failed", err, "deleteTime", deleteTime, "cont", time.Since(now))
-	// 		return
-	// 	}
-	// 	log.ZDebug(ctx, "cron deleteoutDatedData success", "deltime", deleteTime, "cont", time.Since(now))
-	// }
-	// if _, err := crontab.AddFunc(config.CronTask.CronExecuteTime, deleteObjectFunc); err != nil {
-	// 	return errs.Wrap(err)
-	// }
-
+	if err := srv.registerClearUserMsg(); err != nil {
+		return err
+	}
 	log.ZDebug(ctx, "start cron task", "CronExecuteTime", config.CronTask.CronExecuteTime)
-	crontab.Start()
+	srv.cron.Start()
 	<-ctx.Done()
 	return nil
+}
+
+type cronServer struct {
+	ctx                context.Context
+	config             *CronTaskConfig
+	cron               *cron.Cron
+	msgClient          msg.MsgClient
+	conversationClient pbconversation.ConversationClient
+	thirdClient        third.ThirdClient
+}
+
+func (c *cronServer) registerClearS3() error {
+	if c.config.CronTask.FileExpireTime <= 0 || len(c.config.CronTask.DeleteObjectType) == 0 {
+		log.ZInfo(c.ctx, "disable scheduled cleanup of s3", "fileExpireTime", c.config.CronTask.FileExpireTime, "deleteObjectType", c.config.CronTask.DeleteObjectType)
+		return nil
+	}
+	_, err := c.cron.AddFunc(c.config.CronTask.CronExecuteTime, c.clearS3)
+	return errs.WrapMsg(err, "failed to register clear s3 cron task")
+}
+
+func (c *cronServer) registerDeleteMsg() error {
+	if c.config.CronTask.RetainChatRecords <= 0 {
+		log.ZInfo(c.ctx, "disable scheduled cleanup of chat records", "retainChatRecords", c.config.CronTask.RetainChatRecords)
+		return nil
+	}
+	_, err := c.cron.AddFunc(c.config.CronTask.CronExecuteTime, c.deleteMsg)
+	return errs.WrapMsg(err, "failed to register delete msg cron task")
+}
+
+func (c *cronServer) registerClearUserMsg() error {
+	_, err := c.cron.AddFunc(c.config.CronTask.CronExecuteTime, c.clearUserMsg)
+	return errs.WrapMsg(err, "failed to register clear user msg cron task")
 }

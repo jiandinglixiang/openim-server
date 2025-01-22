@@ -16,6 +16,7 @@ package database
 
 import (
 	"context"
+
 	"github.com/openimsdk/open-im-server/v3/pkg/common/storage/model"
 	"github.com/openimsdk/tools/db/pagination"
 )
@@ -41,4 +42,5 @@ type Conversation interface {
 	GetConversationIDsNeedDestruct(ctx context.Context) ([]*model.Conversation, error)
 	GetConversationNotReceiveMessageUserIDs(ctx context.Context, conversationID string) ([]string, error)
 	FindConversationUserVersion(ctx context.Context, userID string, version uint, limit int) (*model.VersionLog, error)
+	FindRandConversation(ctx context.Context, ts int64, limit int) ([]*model.Conversation, error)
 }
